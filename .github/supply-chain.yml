@@ -39,3 +39,4 @@ jobs:
         with:
           name: juiceshop-sbom-spdx
           path: juiceshop.sbom.spdx.json
+
