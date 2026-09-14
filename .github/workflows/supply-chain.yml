@@ -12,369 +12,79 @@ permissions:
 jobs:
   scan:
     runs-on: ubuntu-latest
-
     steps:
-
-      # --------------------------------------------------
-      # 1. Checkout source code
-      # --------------------------------------------------
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # --------------------------------------------------
-      # 2. Setup Node.js
-      # --------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      # --------------------------------------------------
-      # 3. Install application dependencies
-      # --------------------------------------------------
+      # Setup Python environment cleanly for GuardDog
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 1. Install dependencies so node_modules exists
       - name: Install Dependencies
         run: npm install --legacy-peer-deps --ignore-scripts
 
-      # --------------------------------------------------
-      # 4. Install Syft and Grype
-      # --------------------------------------------------
-      - name: Install Syft and Grype
+      # 2. Install Syft and Grype CLIs directly
+      - name: Install Syft and Grype CLIs
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-          | sh -s -- -b /usr/local/bin
-
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
-          | sh -s -- -b /usr/local/bin
-
-      # --------------------------------------------------
-      # 5. Generate SBOM
-      # --------------------------------------------------
-      - name: Generate SBOM
-        run: |
-          syft dir:./node_modules \
-          -o spdx-json > juiceshop.sbom.spdx.json
-
-      # --------------------------------------------------
-      # 6. Run Grype and save results as JSON
-      # --------------------------------------------------
-      - name: Run Grype Vulnerability Scan
-        run: |
-          grype sbom:juiceshop.sbom.spdx.json \
-          -o json > grype-results.json
-
-        continue-on-error: true
-
-      # --------------------------------------------------
-      # 7. Install ReportLab for PDF generation
-      # --------------------------------------------------
-      - name: Install PDF Generator
-        run: |
-          pip install reportlab
-
-      # --------------------------------------------------
-      # 8. Create Python program that builds PDF report
-      # --------------------------------------------------
-      - name: Create Grype PDF Report
-        run: |
-
-          cat > create_report.py <<'PYTHON'
-          import json
-          from reportlab.lib import colors
-          from reportlab.lib.pagesizes import A4, landscape
-          from reportlab.lib.styles import getSampleStyleSheet
-          from reportlab.lib.enums import TA_LEFT
-          from reportlab.platypus import (
-              SimpleDocTemplate,
-              Table,
-              TableStyle,
-              Paragraph,
-              Spacer
-          )
-          from reportlab.lib.units import mm
-
-
-          # ------------------------------------------------
-          # Read Grype JSON results
-          # ------------------------------------------------
-
-          with open("grype-results.json", "r", encoding="utf-8") as f:
-              data = json.load(f)
-
-
-          rows = []
-
-          rows.append([
-              "CVE ID",
-              "GHSA / Original ID",
-              "Severity",
-              "Package",
-              "Installed\nVersion",
-              "Fix\nVersion"
-          ])
-
-
-          # ------------------------------------------------
-          # Process every Grype finding
-          # ------------------------------------------------
-
-          for match in data.get("matches", []):
-
-              vulnerability = match.get("vulnerability", {})
-              artifact = match.get("artifact", {})
-
-              vuln_id = vulnerability.get("id", "")
-
-              cve_id = ""
-              ghsa_id = ""
-
-              # Main vulnerability identifier
-              if vuln_id.startswith("CVE-"):
-                  cve_id = vuln_id
-
-              elif vuln_id.startswith("GHSA-"):
-                  ghsa_id = vuln_id
-
-
-              # Search related vulnerabilities for CVE / GHSA
-              related = match.get("relatedVulnerabilities", [])
-
-              for rel in related:
-
-                  rel_id = rel.get("id", "")
-
-                  if rel_id.startswith("CVE-") and not cve_id:
-                      cve_id = rel_id
-
-                  elif rel_id.startswith("GHSA-") and not ghsa_id:
-                      ghsa_id = rel_id
-
-
-              # If no CVE exists, show original Grype ID
-              if not cve_id:
-                  cve_id = vuln_id
-
-
-              # Severity
-              severity = vulnerability.get("severity", "Unknown")
-
-
-              # Package details
-              package = artifact.get("name", "")
-              installed_version = artifact.get("version", "")
-
-
-              # Fixed versions
-              fix_versions = vulnerability.get("fix", {}).get("versions", [])
-
-              if fix_versions:
-                  fix_version = ", ".join(fix_versions)
-              else:
-                  fix_version = "No fix"
-
-
-              rows.append([
-                  cve_id,
-                  ghsa_id,
-                  severity,
-                  package,
-                  installed_version,
-                  fix_version
-              ])
-
-
-          # ------------------------------------------------
-          # Create PDF
-          # ------------------------------------------------
-
-          pdf_name = "Grype-Vulnerability-Report.pdf"
-
-          document = SimpleDocTemplate(
-              pdf_name,
-              pagesize=landscape(A4),
-              rightMargin=15 * mm,
-              leftMargin=15 * mm,
-              topMargin=15 * mm,
-              bottomMargin=15 * mm
-          )
-
-
-          elements = []
-
-          styles = getSampleStyleSheet()
-
-          title_style = styles["Title"]
-          title_style.fontSize = 26
-          title_style.leading = 30
-          title_style.alignment = TA_LEFT
-
-
-          elements.append(
-              Paragraph(
-                  "<b>Grype Vulnerability Report</b>",
-                  title_style
-              )
-          )
-
-          elements.append(Spacer(1, 12 * mm))
-
-
-          # ------------------------------------------------
-          # Convert text to Paragraph objects
-          # ------------------------------------------------
-
-          table_data = []
-
-          for row_index, row in enumerate(rows):
-
-              formatted_row = []
-
-              for cell in row:
-
-                  style = styles["Normal"]
-
-                  if row_index == 0:
-                      formatted_row.append(
-                          Paragraph("<b>" + str(cell) + "</b>", style)
-                      )
-                  else:
-                      formatted_row.append(
-                          Paragraph(str(cell), style)
-                      )
-
-              table_data.append(formatted_row)
-
-
-          # ------------------------------------------------
-          # Build table
-          # ------------------------------------------------
-
-          table = Table(
-              table_data,
-              colWidths=[
-                  38 * mm,
-                  48 * mm,
-                  25 * mm,
-                  45 * mm,
-                  32 * mm,
-                  32 * mm
-              ],
-              repeatRows=1
-          )
-
-
-          table.setStyle(
-              TableStyle([
-
-                  # Header
-                  ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#F2F2F2")),
-
-                  ("TEXTCOLOR", (0,0), (-1,0), colors.black),
-
-                  ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-
-                  ("FONTSIZE", (0,0), (-1,-1), 9),
-
-                  # Borders
-                  ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#CCCCCC")),
-
-                  # Alignment
-                  ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-
-                  ("ALIGN", (0,0), (-1,-1), "LEFT"),
-
-                  # Padding
-                  ("TOPPADDING", (0,0), (-1,-1), 8),
-
-                  ("BOTTOMPADDING", (0,0), (-1,-1), 8),
-
-                  ("LEFTPADDING", (0,0), (-1,-1), 7),
-
-                  ("RIGHTPADDING", (0,0), (-1,-1), 7),
-
-              ])
-          )
-
-
-          # ------------------------------------------------
-          # Colour High severity orange
-          # ------------------------------------------------
-
-          for row_number in range(1, len(rows)):
-
-              severity = rows[row_number][2].lower()
-
-              if severity == "critical":
-
-                  table.setStyle(
-                      TableStyle([
-                          (
-                              "TEXTCOLOR",
-                              (2,row_number),
-                              (2,row_number),
-                              colors.red
-                          )
-                      ])
-                  )
-
-              elif severity == "high":
-
-                  table.setStyle(
-                      TableStyle([
-                          (
-                              "TEXTCOLOR",
-                              (2,row_number),
-                              (2,row_number),
-                              colors.orange
-                          )
-                      ])
-                  )
-
-
-          elements.append(table)
-
-          document.build(elements)
-
-          print("PDF generated:", pdf_name)
-
-          PYTHON
-
-          python create_report.py
-
-
-      # --------------------------------------------------
-      # 9. Upload PDF to GitHub Actions
-      # --------------------------------------------------
-      - name: Upload Grype PDF Report
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      # 3. Force Syft to scan node_modules directly without ignoring gitignored folders
+      - name: Generate Full SBOM
+        run: syft dir:./node_modules --exclude "" -o spdx-json=juiceshop.sbom.json
+
+      # 4. Upload raw SBOM artifact for download/verification
+      - name: Upload SBOM Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Grype-Vulnerability-Report
-          path: Grype-Vulnerability-Report.pdf
-# Install GuardDog via pip 
-            - name: Install GuardDog & jq
+          name: juiceshop-sbom
+          path: juiceshop.sbom.json
+
+      # 5. Scan the complete SBOM with Grype and output a valid SARIF file
+      - name: Scan SBOM with Grype
+        run: grype sbom:juiceshop.sbom.json -o sarif > results.sarif
+        continue-on-error: true
+
+      # 6. Upload SARIF results to GitHub Security tab
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+          category: "grype-sbom"
+
+# Install GuardDog via pip
+      - name: Install GuardDog & jq
         run: |
           pip3 install guarddog
-          sudo apt-get update
           sudo apt-get install -y jq
 
+     # Parse package.json and run GuardDog scan on each package name
       - name: Run GuardDog Dependency Scan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Extracting dependencies from package.json..."
-
           DEPS=$(jq -r '(.dependencies // {}) + (.devDependencies // {}) | keys[]' package.json)
-
+          
           if [ -z "$DEPS" ]; then
             echo "No dependencies found to scan."
             exit 0
           fi
 
           echo "Scanning dependencies with GuardDog..."
-
           for dep in $DEPS; do
             echo "----------------------------------------"
             echo "Scanning package: $dep"
-
+            # Use 'scan' for remote npm registry packages
             guarddog npm scan "$dep" \
               --exclude-rules metadata_mismatch \
               --exclude-rules potentially_compromised_email_domain \
